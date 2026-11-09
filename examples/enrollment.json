@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "plan_digest": "REPLACE_WITH_REVIEWED_PLAN_DIGEST",
+  "mappings": [
+    {
+      "source_id": "11111111-1111-4111-8111-111111111111",
+      "target_subject": "REPLACE_WITH_ENROLLED_NEON_SUBJECT",
+      "approved_by": "REPLACE_WITH_APPROVER",
+      "proof_reference": "REPLACE_WITH_VERIFIED_ENROLLMENT_RECORD"
+    }
+  ]
+}

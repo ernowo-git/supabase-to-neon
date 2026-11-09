@@ -1,0 +1,49 @@
+name: checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  rust:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned toolchain
+        run: rustup show
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Check warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked
+      - name: Build package
+        run: cargo package --locked --allow-dirty
+  rehearsal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: cargo build --locked
+      - run: python3 -m venv /tmp/rehearsal-python
+      - run: /tmp/rehearsal-python/bin/pip install -r tests/requirements.txt
+      - run: /tmp/rehearsal-python/bin/python tests/docker_rehearsal.py
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo deny check licenses
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

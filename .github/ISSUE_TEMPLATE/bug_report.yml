@@ -1,0 +1,24 @@
+name: Migration failure
+description: Report a failure using synthetic data and sanitized diagnostics.
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach real inventories, plans, dumps, credentials, or user records. Use SECURITY.md for vulnerabilities.
+  - type: textarea
+    id: versions
+    attributes:
+      label: CLI, operating system, PostgreSQL, and provider versions
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction using synthetic data
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true

@@ -1,0 +1,11 @@
+{
+  "plan_digest": "REPLACE_WITH_REVIEWED_PLAN_DIGEST",
+  "recorded_at_unix": 0,
+  "sql_and_runtime_rls_review": "REPLACE_WITH_EVIDENCE_REFERENCE",
+  "verified_auth_flows": "REPLACE_WITH_EVIDENCE_REFERENCE",
+  "storage_access_tests": "REPLACE_WITH_EVIDENCE_REFERENCE",
+  "application_smoke_tests": "REPLACE_WITH_EVIDENCE_REFERENCE",
+  "background_integrations": "REPLACE_WITH_EVIDENCE_REFERENCE",
+  "writes_frozen": "REPLACE_WITH_EVIDENCE_REFERENCE",
+  "recovery_rehearsal": "REPLACE_WITH_EVIDENCE_REFERENCE"
+}
