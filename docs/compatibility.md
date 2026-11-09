@@ -5,13 +5,13 @@ Current alpha support is deliberately narrower than the intended final CLI. Prov
 | Area | Implemented behavior | Gate still required |
 | --- | --- | --- |
 | Database | PostgreSQL custom dump and transactional restore of explicit schemas | Matching client/server major versions; no unsupported dependencies |
-| RLS | Preserves table RLS flags; existing policies block transfer | Reviewed application identity and target-role translation |
-| Extensions | Non-default extensions block transfer | Version and target preparation proof |
+| RLS | Reviewed policy replacements, expected schema, restricted-role read checks | Application session validation and write-path tests |
+| Extensions | Reviewed preparation SQL and expected version inventory | Actual provider extension capability proof |
 | Auth | Source account inventory, enrollment manifest, approved mapping to existing Neon subjects | Real enrollment, login, recovery, disabled-user and old-token tests |
 | Passwords and sessions | Never copied | Users enroll or authenticate again through supported provider flows |
 | Storage bytes | Path-style signed S3 list, multipart transfer, full byte and metadata verification | Actual Supabase and Neon endpoint rehearsal |
 | Storage access | Public/private intent recorded and checked against source bucket metadata | Provision target visibility and verify public/private application behavior |
-| URL references | Manual action in the plan | Reviewed application URL mapping and database updates |
+| URL references | Read-only proposals for allowlisted text columns and URL prefixes | Review target access and URL validity; apply and reconcile changes separately |
 | Realtime, jobs, Edge Functions | Manual action in the plan | Application-specific replacement and tests |
 | Recovery | Preserves source and rejects destructive overwrite | Timed recovery rehearsal and post-cutover reconciliation procedure |
 
@@ -27,4 +27,4 @@ Official references:
 - [Supabase backup scope](https://supabase.com/docs/guides/platform/backups)
 - [PostgreSQL row security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
 
-The older Stack Auth migration blog does not establish password-import support for current Managed Better Auth. Existing policies, dynamic SQL, managed foreign keys, source grants, and external integrations require review even when table rows can transfer.
+The older Stack Auth migration blog does not establish password-import support for current Managed Better Auth. Existing policies, dynamic SQL, managed foreign keys, source grants, and external integrations require review even when table rows can transfer. [Reviewed adaptations](adaptations.md) support exact schema-entry exclusions and SQL replacements without changing data column shapes. This does not make arbitrary Supabase schemas automatically compatible.

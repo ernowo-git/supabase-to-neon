@@ -6,11 +6,13 @@ use std::{
     path::{Path, PathBuf},
 };
 use supabase_to_neon::{
+    adaptation::{self, Adaptation},
     auth,
     config::Config,
     database, digest,
     plan::{self, Plan},
     read_json,
+    references::{self, PreviewSpec},
     run::Run,
     storage, write_json, write_private,
 };
@@ -44,6 +46,22 @@ enum Action {
     Plan {
         #[arg(long)]
         inventory: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        adaptation: Option<PathBuf>,
+    },
+    AdaptationTemplate {
+        #[arg(long)]
+        inventory: PathBuf,
+        #[arg(long)]
+        expected_inventory: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    ArchiveList {
+        #[arg(long)]
+        plan: PathBuf,
         #[arg(long)]
         out: PathBuf,
     },
@@ -90,6 +108,16 @@ enum Action {
     Report {
         #[arg(long)]
         run: PathBuf,
+    },
+    UrlPreview {
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        spec: PathBuf,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -162,8 +190,14 @@ async fn execute(action: Action) -> Result<()> {
             write_json(&out, &inventory)?;
             print(json!({"ok":true,"inventory":out}))
         }
-        Action::Plan { inventory, out } => {
-            let plan = plan::build(read_json(&inventory)?)?;
+        Action::Plan {
+            inventory,
+            out,
+            adaptation,
+        } => {
+            let adaptation: Option<Adaptation> =
+                adaptation.as_deref().map(read_json).transpose()?;
+            let plan = plan::build_with_adaptation(read_json(&inventory)?, adaptation)?;
             write_json(&out, &plan)?;
             print(
                 json!({"ok":plan.blockers.is_empty(),"digest":plan.digest,"blockers":plan.blockers,"plan":out}),
@@ -173,6 +207,30 @@ async fn execute(action: Action) -> Result<()> {
                 "plan contains blockers; review the saved plan"
             );
             Ok(())
+        }
+        Action::AdaptationTemplate {
+            inventory,
+            expected_inventory,
+            out,
+        } => {
+            let inventory = read_json(&inventory)?;
+            let expected = expected_inventory.as_deref().map(read_json).transpose()?;
+            let adaptation = adaptation::template(&inventory, expected.as_ref())?;
+            write_json(&out, &adaptation)?;
+            print(
+                json!({"ok":true,"template":out,"source_schema_sha256":adaptation.source_schema_sha256,"note":"Complete and review this template; it is not an executable migration yet."}),
+            )
+        }
+        Action::ArchiveList { plan, out } => {
+            let p = load_plan(&plan)?;
+            let (source, _) = p.connections().await?;
+            let temp = tempfile::tempdir()?;
+            let path = temp.path().join("schema.dump");
+            source
+                .dump_schema(&p.inventory.config.schemas, &path)
+                .await?;
+            write_private(&out, source.archive_list(&path).await?.as_bytes())?;
+            print(json!({"ok":true,"archive_list":out}))
         }
         Action::AuthExport { plan, out } => {
             let p = load_plan(&plan)?;
@@ -265,6 +323,25 @@ async fn execute(action: Action) -> Result<()> {
             let r = Run::open(&run, &binding)?;
             print(json!({"ok":true,"plan_digest":binding,"events":r.events()?}))
         }
+        Action::UrlPreview {
+            plan,
+            spec,
+            limit,
+            out,
+        } => {
+            let p = load_plan(&plan)?;
+            ensure!(
+                p.blockers.is_empty(),
+                "URL previews require a plan without unresolved blockers"
+            );
+            let spec: PreviewSpec = read_json(&spec)?;
+            spec.validate(&p)?;
+            let (_, target) = p.connections().await?;
+            verify_schema(&p, &target).await?;
+            let report = references::preview(&p, &spec, &target, limit).await?;
+            write_json(&out, &report)?;
+            print(json!({"ok":true,"preview":out,"applied":false}))
+        }
     }
 }
 
@@ -317,6 +394,11 @@ async fn apply(
                 table_digests(p, source).await? == before,
                 "source data changed around dump; freeze writes and restart"
             );
+            let exclusions = p
+                .adaptation
+                .as_ref()
+                .map(|a| a.exclude_toc.as_slice())
+                .unwrap_or(&[]);
             let existing_schemas: Vec<String> = p.inventory.target_database["schema_names"]
                 .as_array()
                 .context("missing target schema inventory")?
@@ -327,7 +409,23 @@ async fn apply(
                         .context("invalid target schema name")
                 })
                 .collect::<Result<_>>()?;
-            target.restore(&archive, &existing_schemas).await?;
+            // Validate every named exclusion before any reviewed SQL mutates the target.
+            database::filter_toc(
+                &source.archive_list(&archive).await?,
+                &existing_schemas,
+                exclusions,
+            )?;
+            if let Some(a) = &p.adaptation {
+                execute_reviewed_sql(target, run, "before-restore.sql", &a.before_restore_sql)
+                    .await?;
+            }
+            target
+                .restore(&archive, &existing_schemas, exclusions)
+                .await?;
+            if let Some(a) = &p.adaptation {
+                execute_reviewed_sql(target, run, "after-restore.sql", &a.after_restore_sql)
+                    .await?;
+            }
             ensure!(
                 table_digests(p, target).await? == before,
                 "restored rows differ from frozen source"
@@ -420,6 +518,9 @@ async fn table_digests(
 }
 
 async fn verify_schema(p: &Plan, target: &database::Connection) -> Result<()> {
+    if let Some(a) = &p.adaptation {
+        return a.verify(target, &p.inventory.config.schemas).await;
+    }
     let actual = database::inventory(target, &p.inventory.config.schemas).await?;
     for key in [
         "tables",
@@ -439,6 +540,20 @@ async fn verify_schema(p: &Plan, target: &database::Connection) -> Result<()> {
     }
     // pg_dump restores sequence values independently of schema definitions.
     Ok(())
+}
+
+async fn execute_reviewed_sql(
+    target: &database::Connection,
+    run: &Run,
+    name: &str,
+    sql: &str,
+) -> Result<()> {
+    if sql.trim().is_empty() {
+        return Ok(());
+    }
+    let path = run.directory.join(name);
+    write_private(&path, sql.as_bytes())?;
+    target.execute_file(&path).await
 }
 
 async fn verify_sequences(

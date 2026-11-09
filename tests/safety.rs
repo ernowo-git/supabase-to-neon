@@ -2,10 +2,13 @@ use anyhow::Result;
 use serde_json::json;
 use std::collections::BTreeMap;
 use supabase_to_neon::{
+    adaptation::{self, AuthorizationCheck},
     auth::{self, Enrollment, Mapping},
     config::Config,
+    database,
     plan::{self, Inventory},
     read_json,
+    references::{PreviewSpec, Rewrite},
     run::Run,
     write_private,
 };
@@ -13,9 +16,9 @@ use uuid::Uuid;
 
 fn fixture() -> Inventory {
     let config: Config = toml::from_str(include_str!("../examples/migration.toml")).unwrap();
-    let db = json!({"server_version":"170000","schema_names":["public"],"types":[],"rules":[],"tables":[],"views":[],"functions":[],"policies":[],"triggers":[],"extensions":[{"name":"plpgsql"}],"foreign_keys":[],"sequences":[],"grants":[],"publications":[],"foreign_servers":[]});
+    let db = json!({"routine_grants":[],"server_version":"170000","schema_names":["public"],"types":[],"rules":[],"tables":[],"views":[],"functions":[],"policies":[],"triggers":[],"extensions":[{"name":"plpgsql"}],"foreign_keys":[],"sequences":[],"grants":[],"publications":[],"foreign_servers":[]});
     Inventory {
-        version: 1,
+        version: 2,
         config,
         source_identity: "source".into(),
         target_identity: "target".into(),
@@ -30,6 +33,95 @@ fn fixture() -> Inventory {
         buckets: vec![vec![]],
         source_buckets: json!([{"name":"documents","public":false,"object_count":0}]),
     }
+}
+
+#[test]
+fn url_preview_requires_an_allowlisted_text_column_and_unsigned_prefixes() -> Result<()> {
+    let mut i = fixture();
+    i.database["tables"] = json!([{"schema":"public","name":"parts","columns":[{"name":"image_url","type":"text","generated":""}]}]);
+    let p = plan::build(i)?;
+    let mut spec = PreviewSpec {
+        version: 1,
+        plan_digest: p.digest.clone(),
+        rewrites: vec![Rewrite {
+            schema: "public".into(),
+            table: "parts".into(),
+            column: "image_url".into(),
+            source_prefix: "https://old.example/media/".into(),
+            target_prefix: "https://new.example/media/".into(),
+        }],
+    };
+    spec.validate(&p)?;
+    spec.rewrites[0].source_prefix = "https://old.example/media/?token=secret".into();
+    assert!(spec.validate(&p).is_err());
+    spec.rewrites[0].source_prefix = "https://old.example/media/".into();
+    spec.rewrites[0].column = "arbitrary_column".into();
+    assert!(spec.validate(&p).is_err());
+    spec.rewrites[0].column = "image_url".into();
+    spec.plan_digest = "different".into();
+    assert!(spec.validate(&p).is_err());
+    Ok(())
+}
+
+#[test]
+fn reviewed_adaptation_is_source_bound_and_preserves_data_shape() -> Result<()> {
+    let mut i = fixture();
+    i.database["tables"] = json!([{"schema":"public","name":"notes","relkind":"r","rls":true,"columns":[{"name":"id","type":"uuid","not_null":true,"generated":"","default":null}],"constraints":null,"indexes":null}]);
+    let mut a = adaptation::template(&i, None)?;
+    a.expected_database = i.database.clone();
+    a.reviewed_by = "reviewer".into();
+    a.review_reference = "review-123".into();
+    a.authorization_checks.push(AuthorizationCheck {
+        name: "missing actor".into(),
+        role: "app_reader".into(),
+        actor_id: None,
+        sql: "SELECT to_json(0);".into(),
+        expected: json!(0),
+    });
+    a.validate(&i)?;
+    let p = plan::build_with_adaptation(i.clone(), Some(a.clone()))?;
+    p.validate()?;
+    let mut tampered = p;
+    tampered.adaptation.as_mut().unwrap().before_restore_sql = "SELECT 1;".into();
+    assert!(tampered.validate().is_err());
+    let mut wrong = a.clone();
+    wrong.expected_database["tables"][0]["columns"][0]["type"] = json!("text");
+    assert!(wrong.validate(&i).is_err());
+    let mut wrong = a.clone();
+    wrong.expected_database["tables"][0]["rls"] = json!(false);
+    assert!(wrong.validate(&i).is_err());
+    let mut wrong = a.clone();
+    wrong.source_schema_sha256 = "stale".into();
+    assert!(wrong.validate(&i).is_err());
+    let mut wrong = a.clone();
+    wrong.expected_database["schema_names"] = json!(["unexpected"]);
+    assert!(wrong.validate(&i).is_err());
+    let mut wrong = a;
+    wrong.authorization_checks.clear();
+    assert!(wrong.validate(&i).is_err());
+    Ok(())
+}
+
+#[test]
+fn archive_filter_never_excludes_data_and_requires_exact_unique_matches() -> Result<()> {
+    let toc = "; archive\n5; 2615 2200 SCHEMA - public postgres\n10; 0 123 TABLE DATA public notes postgres\n11; 3256 456 POLICY public notes owner_only postgres\n";
+    let exclusions = vec!["POLICY public notes owner_only postgres".into()];
+    let result = database::filter_toc(toc, &["public".into()], &exclusions)?;
+    assert!(result.contains("; 11;"));
+    assert!(result.contains("\n10; 0 123 TABLE DATA"));
+    assert!(database::filter_toc(toc, &[], &["TABLE DATA public notes postgres".into()]).is_err());
+    assert!(
+        database::filter_toc(toc, &[], &["POLICY public notes missing postgres".into()]).is_err()
+    );
+    assert!(
+        database::filter_toc(
+            &(toc.to_owned() + "12; 3256 789 POLICY public notes owner_only postgres\n"),
+            &[],
+            &exclusions
+        )
+        .is_err()
+    );
+    Ok(())
 }
 
 #[test]

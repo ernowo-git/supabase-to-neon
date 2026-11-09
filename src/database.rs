@@ -164,6 +164,19 @@ impl Connection {
     }
 
     pub async fn dump(&self, schemas: &[String], path: &std::path::Path) -> Result<()> {
+        self.dump_options(schemas, path, false).await
+    }
+
+    pub async fn dump_schema(&self, schemas: &[String], path: &std::path::Path) -> Result<()> {
+        self.dump_options(schemas, path, true).await
+    }
+
+    async fn dump_options(
+        &self,
+        schemas: &[String],
+        path: &std::path::Path,
+        schema_only: bool,
+    ) -> Result<()> {
         let mut cmd = self.command("pg_dump");
         cmd.args([
             "-w",
@@ -173,6 +186,9 @@ impl Connection {
             "--file",
         ])
         .arg(path);
+        if schema_only {
+            cmd.arg("--schema-only");
+        }
         for s in schemas {
             ensure!(identifier(s), "invalid schema");
             cmd.arg(format!("--schema={s}"));
@@ -188,7 +204,7 @@ impl Connection {
         Ok(())
     }
 
-    pub async fn restore(&self, path: &std::path::Path, existing_schemas: &[String]) -> Result<()> {
+    pub async fn archive_list(&self, path: &std::path::Path) -> Result<String> {
         let output = self
             .command("pg_restore")
             .arg("--list")
@@ -199,20 +215,18 @@ impl Connection {
             output.status.success(),
             "cannot inspect archive table of contents"
         );
-        let toc = String::from_utf8(output.stdout).context("invalid archive table of contents")?;
+        String::from_utf8(output.stdout).context("invalid archive table of contents")
+    }
+
+    pub async fn restore(
+        &self,
+        path: &std::path::Path,
+        existing_schemas: &[String],
+        exclusions: &[String],
+    ) -> Result<()> {
+        let toc = self.archive_list(path).await?;
         let mut list = tempfile::NamedTempFile::new()?;
-        for line in toc.lines() {
-            let fields: Vec<_> = line.split_whitespace().collect();
-            let existing = fields.len() >= 6
-                && fields[3] == "SCHEMA"
-                && fields[4] == "-"
-                && existing_schemas.iter().any(|s| s == fields[5]);
-            if existing {
-                writeln!(list, "; {line}")?;
-            } else {
-                writeln!(list, "{line}")?;
-            }
-        }
+        list.write_all(filter_toc(&toc, existing_schemas, exclusions)?.as_bytes())?;
         list.as_file().sync_all()?;
         let status = self
             .command("pg_restore")
@@ -282,6 +296,44 @@ impl Connection {
         ))
         .await
     }
+}
+
+pub fn filter_toc(toc: &str, existing_schemas: &[String], exclusions: &[String]) -> Result<String> {
+    let mut matches = vec![0usize; exclusions.len()];
+    let mut result = String::new();
+    for line in toc.lines() {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        let entry = fields.iter().skip(3).copied().collect::<Vec<_>>().join(" ");
+        let is_entry = fields
+            .first()
+            .is_some_and(|f| f.ends_with(';') && f[..f.len() - 1].parse::<u64>().is_ok());
+        let existing = is_entry
+            && fields.len() >= 6
+            && fields[3] == "SCHEMA"
+            && fields[4] == "-"
+            && existing_schemas.iter().any(|s| s == fields[5]);
+        let mut excluded = false;
+        for (i, requested) in exclusions.iter().enumerate() {
+            ensure!(
+                crate::adaptation::supported_exclusion(requested),
+                "unsafe archive exclusion"
+            );
+            if is_entry && &entry == requested {
+                matches[i] += 1;
+                excluded = true;
+            }
+        }
+        if existing || excluded {
+            result.push_str("; ");
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    ensure!(
+        matches.iter().all(|n| *n == 1),
+        "archive exclusions must match exactly one schema entry each"
+    );
+    Ok(result)
 }
 
 fn decode(s: &str) -> Result<String> {

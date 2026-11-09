@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "plan_digest": "REPLACE_WITH_REVIEWED_PLAN_DIGEST",
+  "rewrites": [
+    {
+      "schema": "public",
+      "table": "products",
+      "column": "image_url",
+      "source_prefix": "https://old.example/storage/v1/object/public/product-images/",
+      "target_prefix": "https://new.example/media/product-images/"
+    }
+  ]
+}

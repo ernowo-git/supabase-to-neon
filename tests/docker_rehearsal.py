@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from adaptation_rehearsal import rehearse_adaptation
 
 import boto3
 from botocore.config import Config as S3Config
@@ -162,6 +163,7 @@ def main():
             cli("verify", "--plan", "plan.json", "--enrollment", "enrollment.json", "--out", "must-not-exist.json", success=False)
             assert not (path / "must-not-exist.json").exists()
             cli("report", "--run", "run")
+            rehearse_adaptation(path,sql,cli,client,ACTIVE,DISABLED)
             print("PASS: database restore, sequence state, Auth mapping, disabled identity, S3 multipart, Unicode, metadata, empty files, safe retries, and content-drift rejection.")
             print("This is a local protocol rehearsal. It does not establish Neon provider compatibility.")
         finally:

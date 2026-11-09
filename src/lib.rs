@@ -1,7 +1,9 @@
+pub mod adaptation;
 pub mod auth;
 pub mod config;
 pub mod database;
 pub mod plan;
+pub mod references;
 pub mod run;
 pub mod storage;
 

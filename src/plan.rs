@@ -1,4 +1,5 @@
 use crate::{
+    adaptation::{self, Adaptation},
     config::Config,
     database::{self, Connection},
     digest, storage,
@@ -31,6 +32,8 @@ pub struct Plan {
     pub blockers: Vec<String>,
     pub manual_actions: Vec<String>,
     pub digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptation: Option<Adaptation>,
 }
 
 pub async fn inspect(config: Config) -> Result<Inventory> {
@@ -54,7 +57,7 @@ pub async fn inspect(config: Config) -> Result<Inventory> {
         buckets.push(storage::inventory(&storage::connect(&b.source)?).await?);
     }
     Ok(Inventory {
-        version: 1,
+        version: 2,
         config,
         source_identity: source.identity,
         target_identity: target.identity,
@@ -68,8 +71,15 @@ pub async fn inspect(config: Config) -> Result<Inventory> {
 }
 
 pub fn build(inventory: Inventory) -> Result<Plan> {
-    ensure!(inventory.version == 1, "unsupported inventory version");
+    build_with_adaptation(inventory, None)
+}
+
+pub fn build_with_adaptation(inventory: Inventory, adaptation: Option<Adaptation>) -> Result<Plan> {
+    ensure!(inventory.version == 2, "unsupported inventory version");
     inventory.config.validate()?;
+    if let Some(a) = &adaptation {
+        a.validate(&inventory)?;
+    }
     ensure!(
         inventory.source_identity != inventory.target_identity,
         "source and target must differ"
@@ -91,6 +101,7 @@ pub fn build(inventory: Inventory) -> Result<Plan> {
         "types",
         "rules",
         "schema_names",
+        "routine_grants",
     ] {
         ensure!(db[key].is_array(), "database inventory is incomplete");
     }
@@ -153,11 +164,12 @@ pub fn build(inventory: Inventory) -> Result<Plan> {
         .as_array()
         .context("missing foreign keys")?
     {
-        if !inventory
-            .config
-            .schemas
-            .iter()
-            .any(|s| Some(s.as_str()) == fk["target_schema"].as_str())
+        if adaptation.is_none()
+            && !inventory
+                .config
+                .schemas
+                .iter()
+                .any(|s| Some(s.as_str()) == fk["target_schema"].as_str())
         {
             blockers.insert("Cross-schema foreign keys require a reviewed application migration before this alpha can restore them.".into());
         }
@@ -170,26 +182,14 @@ pub fn build(inventory: Inventory) -> Result<Plan> {
         "rules",
         "types",
     ] {
-        let text = serde_json::to_string(&db[key])?
-            .to_lowercase()
-            .replace(['"', '\\'], "");
-        if [
-            "auth.",
-            "storage.",
-            "vault.",
-            "realtime.",
-            "net.",
-            "supabase_",
-        ]
-        .iter()
-        .any(|s| text.contains(s))
-        {
+        if adaptation.is_none() && adaptation::has_managed_reference(&db[key])? {
             blockers.insert("Managed-service SQL references require reviewed replacements before database transfer.".into());
         }
     }
-    if db["functions"]
-        .as_array()
-        .is_some_and(|v| v.iter().any(|f| f["security_definer"] == true))
+    if adaptation.is_none()
+        && db["functions"]
+            .as_array()
+            .is_some_and(|v| v.iter().any(|f| f["security_definer"] == true))
     {
         blockers.insert("SECURITY DEFINER functions require reviewed target ownership and execution grants before transfer.".into());
     }
@@ -212,7 +212,7 @@ pub fn build(inventory: Inventory) -> Result<Plan> {
                 .into(),
         );
     }
-    if db["policies"].as_array().is_some_and(|v| !v.is_empty()) {
+    if adaptation.is_none() && db["policies"].as_array().is_some_and(|v| !v.is_empty()) {
         blockers.insert("Existing policies need reviewed target-role and identity translations; this alpha does not rewrite SQL.".into());
     }
     if db["foreign_servers"]
@@ -232,7 +232,7 @@ pub fn build(inventory: Inventory) -> Result<Plan> {
         }
     }
     for ext in db["extensions"].as_array().context("missing extensions")? {
-        if ext["name"] != "plpgsql" {
+        if adaptation.is_none() && ext["name"] != "plpgsql" {
             blockers.insert("Non-default extensions require a tested target preparation migration; not automated in this alpha.".into());
         }
     }
@@ -283,11 +283,12 @@ pub fn build(inventory: Inventory) -> Result<Plan> {
         "Freeze database, Auth, storage, and background writes before the final snapshot. Reconcile recovery after target writes open.".into(),
     ];
     let mut plan = Plan {
-        version: 1,
+        version: 2,
         inventory,
         blockers: blockers.into_iter().collect(),
         manual_actions,
         digest: String::new(),
+        adaptation,
     };
     plan.digest = plan.computed_digest()?;
     Ok(plan)
@@ -301,10 +302,10 @@ impl Plan {
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.version == 1 && self.digest == self.computed_digest()?,
+            self.version == 2 && self.digest == self.computed_digest()?,
             "plan is corrupted or has changed"
         );
-        let rebuilt = build(self.inventory.clone())?;
+        let rebuilt = build_with_adaptation(self.inventory.clone(), self.adaptation.clone())?;
         ensure!(
             self.digest == rebuilt.digest,
             "plan policy differs; generate a fresh plan"

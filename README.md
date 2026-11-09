@@ -4,7 +4,7 @@ A Rust CLI for inspecting and rehearsing a Supabase exit to Neon Postgres, Neon 
 
 This is an early alpha. It transfers compatible application schemas, records verified identity mappings after account enrollment, and streams S3 objects with independent SHA-256 verification. It does not import Supabase passwords or sessions. Current Neon documentation requires a separate account transition. [Neon Auth migration](https://neon.com/docs/auth/migrate/from-supabase)
 
-Read [compatibility](docs/compatibility.md) before using real data. Existing RLS policies, managed-schema references, cross-schema foreign keys, partitions, and non-default extensions currently block database transfer. No production compatibility or zero-downtime guarantee is claimed.
+Read [compatibility](docs/compatibility.md) before using real data. RLS policies, managed-schema references, cross-schema foreign keys, and non-default extensions require a [reviewed adaptation](docs/adaptations.md). Partitions remain unsupported. No production compatibility or zero-downtime guarantee is claimed.
 
 ## Build and check
 
@@ -37,7 +37,17 @@ just cli auth-export --plan plan.json --out enrollment-source.json
 
 Inventory and plans may contain personal data and SQL function bodies. They are written with private permissions and never overwritten. Protect and dispose of these artifacts as database exports. A plan contains a digest of its inventory, nonsecret configuration, endpoint identities, and tool versions. This detects accidental edits and drift; it is not a cryptographic signature from a trusted reviewer.
 
-The source SQL inspection reports known dependencies. Dynamic SQL, external services, jobs, and application behavior still require human review. Project IDs are operator labels; endpoint fingerprints, rather than provider account APIs, bind the inspected connections.
+The source SQL inspection reports known dependencies. Dynamic SQL, external services, jobs, and application behavior still require human review. Project IDs are operator labels; endpoint fingerprints, rather than provider account APIs, bind the inspected connections. Upgrades from alpha.1 require fresh inventories and plans.
+
+For a source with managed dependencies, save the blocked plan, export the archive list, and bind a reviewed replacement to a destination schema captured during rehearsal:
+
+```sh
+just cli archive-list --plan plan.json --out archive-list.txt
+just cli adaptation-template --inventory inventory.json --expected-inventory expected-inventory.json --out adaptation.json
+just cli plan --inventory inventory.json --adaptation adaptation.json --out reviewed-plan.json
+```
+
+Complete the generated template before planning. It starts with empty review fields and checks and cannot execute as generated. The [adaptation guide](docs/adaptations.md) explains the expected-schema rehearsal, archive exclusions, SQL stages, and runtime authorization checks.
 
 ## Rehearse a transfer
 
@@ -57,7 +67,7 @@ just cli verify --plan plan.json --enrollment enrollment.json --out verification
 just cli report --run .runs/rehearsal
 ```
 
-Database restore uses one PostgreSQL transaction and does not overwrite an existing application schema. A failed database run needs a new run directory and a verified empty target. Auth and storage retries inspect remote results before proceeding. Storage refuses differing existing objects, never deletes keys, and re-reads bytes and metadata on resume. Do not allow concurrent writers to the destination.
+Database restore uses one PostgreSQL transaction and does not overwrite an existing application schema. An adaptation's preparation SQL, archive restore, and completion SQL are separate transactions. When translated foreign keys need application principals, run Auth before the database phase. A failed database run needs a new run directory and a verified empty target, with deliberate cleanup of any preparation objects. Auth and storage retries inspect remote results before proceeding. Storage refuses differing existing objects, never deletes keys, and re-reads bytes and metadata on resume. Do not allow concurrent writers to the destination.
 
 The run journal records completed operations. An interrupted step is incomplete until checked again. SIGINT stops the CLI and kills its PostgreSQL child process. Interrupted multipart uploads may leave unfinished upload parts that need provider-side cleanup.
 
@@ -73,6 +83,18 @@ just cli cutover-check --plan plan.json --enrollment enrollment.json --evidence 
 
 This command reruns data checks and records operator attestations. It does not validate external documents or switch traffic. The provider compatibility gate and application release review remain necessary. See [cutover](docs/cutover.md) and [recovery](docs/recovery.md).
 
+## Preview stored URL changes
+
+Copy and edit [the URL preview specification](examples/url-preview.json), binding it to the current plan digest and explicitly naming each table, text column, and old and new URL prefix.
+
+```sh
+just cli url-preview --plan plan.json --spec url-preview-spec.json --limit 100 --out url-proposals.json
+```
+
+The preview reads the verified destination schema and returns matching primary keys, current URLs, and proposed URLs. It records the total number of matches and whether the output is truncated. Each column is limited to 100 proposals by default, with a maximum of 10000. It counts all matches, so large tables can take time to scan.
+
+Prefixes must end in a slash and cannot contain credentials or query strings. Text and varchar columns are supported; JSON, arrays, domains, generated columns, and tables without a primary key require separate review. Encoded path suffixes are preserved. Rows containing query strings or fragments are marked for manual review and receive no proposed URL. The command never updates rows or copies access policies. Recreate signed links through the target application. Applying URL changes later changes table content and requires separate reconciliation; it is not part of the original byte-for-byte database verification.
+
 ## Synthetic integration rehearsal
 
 Install `tests/requirements.txt` in a Python virtual environment and allow Docker access, then run:
@@ -87,9 +109,9 @@ S3Mock and fixture Auth tables test protocol behavior, not Neon compatibility. S
 
 ## Development status
 
-Implemented: config checks, inspection, deterministic plans, protected artifacts, run locking, journal records, compatible database transfer, enrollment manifests and principal mappings, S3 transfer and content verification, technical readiness checks, and local failure tests.
+Implemented: config checks, inspection, deterministic plans, reviewed schema and RLS adaptations, extension preparation through reviewed SQL, protected artifacts, run locking, journal records, database transfer, enrollment manifests and principal mappings, S3 transfer and content verification, technical readiness checks, and local failure tests.
 
-Still required for the broader migration plan: reviewed schema adaptations and restore ordering for managed dependencies, extension preparation, automated provider-supported enrollment where available, a real Neon compatibility rehearsal, application access-policy proofs, broader failure injection, and measured operational limits. See [implementation status](docs/implementation-status.md).
+Still required for the broader migration plan: automated provider-supported enrollment where available, a real Neon compatibility rehearsal, application session and write-policy proofs, broader failure injection, and measured operational limits. See [implementation status](docs/implementation-status.md).
 
 MIT licensed. See [security](SECURITY.md) and [contributing](CONTRIBUTING.md).
 

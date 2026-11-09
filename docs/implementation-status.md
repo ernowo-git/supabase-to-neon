@@ -12,11 +12,11 @@ The project is an alpha implementation of the full-migration plan, not a complet
 - [x] Account enrollment export and approved application-principal mapping
 - [x] S3 multipart transfer, metadata and SHA-256 verification, collision-safe retries
 - [x] Operator-attested cutover checks and recovery guidance
-- [ ] Reviewed SQL adaptations and restore ordering for managed-schema dependencies
-- [ ] Target extension preparation and policy translation
+- [x] Reviewed SQL adaptations and restore ordering for named managed-schema dependencies
+- [x] Target extension preparation and policy translation through reviewed SQL
 - [ ] Supported automated Neon enrollment API proof
 - [ ] Real Supabase and Neon disposable-project rehearsal
-- [ ] Automated URL-reference rewrite previews
+- [x] Read-only URL-reference rewrite previews for allowlisted text columns
 - [ ] Provider-specific application authorization and storage access proofs
 - [ ] Disk exhaustion, credential expiry, throttling, and cancellation failure matrix
 - [ ] Measured production-volume limits and recovery objectives
@@ -26,6 +26,6 @@ Publishing source as an alpha does not satisfy the unchecked provider and produc
 
 ## Local validation
 
-The local check suite passes formatting, Clippy with warnings denied, and nine safety tests. The synthetic Docker rehearsal covers database transfer, sequence values, approved active-account mappings, disabled-account denial, S3 multipart transfer, metadata, Unicode and empty objects, safe retries, blocked plans, stale evidence, and altered destination data. It uses fixture Auth tables and an S3 emulator rather than real managed services. The initial local rehearsal used MinIO. The portable CI fixture uses Adobe S3Mock because the cached MinIO image is no longer publicly pullable.
+The local check suite covers formatting, Clippy with warnings denied, and twelve safety tests. The synthetic Docker rehearsal covers database transfer, sequence values, approved active-account mappings, disabled-account denial, S3 multipart transfer, metadata, Unicode and empty objects, safe retries, blocked plans, stale evidence, and altered destination data. Its adaptation scenario translates an Auth foreign key and an RLS policy, prepares an extension, verifies restricted runtime reads, and rejects unsafe roles and changed policies. It uses fixture Auth tables and an S3 emulator rather than real managed services. The initial local rehearsal used MinIO. The portable CI fixture uses Adobe S3Mock because the cached MinIO image is no longer publicly pullable.
 
 The pinned dependency set passes Cargo Audit with no reported vulnerabilities or informational advisories, and Cargo Deny license checks. Checks are point-in-time results; CI reruns them for changes.

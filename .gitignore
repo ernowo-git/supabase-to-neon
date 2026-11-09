@@ -7,3 +7,4 @@
 *.dump
 *.pgpass
 *.jsonl
+__pycache__/
