@@ -81,9 +81,9 @@ Install `tests/requirements.txt` in a Python virtual environment and allow Docke
 just rehearse
 ```
 
-The script creates isolated PostgreSQL and MinIO containers, exercises the CLI with synthetic records and objects, and removes those containers afterward. It never reuses existing databases or storage. PostgreSQL tools run in the disposable container. Set `REHEARSAL_POSTGRES_IMAGE` and `REHEARSAL_S3_IMAGE` to image digests for reproducible infrastructure.
+The script creates isolated PostgreSQL and Adobe S3Mock containers, exercises the CLI with synthetic records and objects, and removes those containers afterward. It never reuses existing databases or storage. PostgreSQL tools run in the disposable container. Default images are pinned by digest. Alternate images must expose the same PostgreSQL and S3Mock interfaces.
 
-MinIO and fixture Auth tables test protocol behavior, not Neon compatibility. Real Neon Auth and Object Storage need a disposable provider rehearsal before any production claim.
+S3Mock and fixture Auth tables test protocol behavior, not Neon compatibility. S3Mock does not establish provider credential or access-policy behavior. Real Neon Auth and Object Storage need a disposable provider rehearsal before any production claim.
 
 ## Development status
 

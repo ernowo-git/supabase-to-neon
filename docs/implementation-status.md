@@ -26,6 +26,6 @@ Publishing source as an alpha does not satisfy the unchecked provider and produc
 
 ## Local validation
 
-The local check suite passes formatting, Clippy with warnings denied, and nine safety tests. The synthetic Docker rehearsal covers database transfer, sequence values, approved active-account mappings, disabled-account denial, S3 multipart transfer, metadata, Unicode and empty objects, safe retries, blocked plans, stale evidence, and altered destination data. It uses fixture Auth tables and MinIO rather than real managed services.
+The local check suite passes formatting, Clippy with warnings denied, and nine safety tests. The synthetic Docker rehearsal covers database transfer, sequence values, approved active-account mappings, disabled-account denial, S3 multipart transfer, metadata, Unicode and empty objects, safe retries, blocked plans, stale evidence, and altered destination data. It uses fixture Auth tables and an S3 emulator rather than real managed services. The initial local rehearsal used MinIO. The portable CI fixture uses Adobe S3Mock because the cached MinIO image is no longer publicly pullable.
 
 The pinned dependency set passes Cargo Audit with no reported vulnerabilities or informational advisories, and Cargo Deny license checks. Checks are point-in-time results; CI reruns them for changes.

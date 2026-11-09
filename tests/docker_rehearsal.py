@@ -16,13 +16,17 @@ ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target/debug/supabase-to-neon"
 DOCKER = shutil.which("docker")
 PG_IMAGE = os.environ.get("REHEARSAL_POSTGRES_IMAGE", "postgres@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24")
-S3_IMAGE = os.environ.get("REHEARSAL_S3_IMAGE", "minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e")
+S3_IMAGE = os.environ.get("REHEARSAL_S3_IMAGE", "adobe/s3mock@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92")
 ACTIVE = "11111111-1111-4111-8111-111111111111"
 DISABLED = "22222222-2222-4222-8222-222222222222"
 
 
 def docker(*args, **kwargs):
-    return subprocess.run([DOCKER, *args], check=True, capture_output=True, **kwargs).stdout.decode().strip()
+    result = subprocess.run([DOCKER, *args], capture_output=True, **kwargs)
+    if result.returncode:
+        # This harness uses synthetic credentials only. Preserve container startup diagnostics in CI.
+        raise RuntimeError("Disposable Docker operation failed: " + result.stderr.decode(errors="replace"))
+    return result.stdout.decode().strip()
 
 
 def main():
@@ -70,9 +74,9 @@ def main():
                 CREATE VIEW public.available_parts WITH (security_invoker=true) AS SELECT id,name FROM public.parts;
             """)
             sql("target", "CREATE SCHEMA neon_auth; CREATE TABLE neon_auth.\"user\"(id text PRIMARY KEY,banned boolean NOT NULL DEFAULT false); INSERT INTO neon_auth.\"user\"(id) VALUES('enrolled-fixture-user');")
-            docker("run", "-d", "--name", s3, "--tmpfs", "/data", "-p", "127.0.0.1::9000",
-                   "-e", "MINIO_ROOT_USER=synthetic-key", "-e", "MINIO_ROOT_PASSWORD=synthetic-test-secret", S3_IMAGE, "server", "/data")
-            port = docker("port", s3, "9000/tcp").rsplit(":", 1)[1]
+            docker("run", "-d", "--name", s3, "--tmpfs", "/s3mockroot:mode=1777", "-p", "127.0.0.1::9090",
+                   "-e", "COM_ADOBE_TESTING_S3MOCK_STORE_ROOT=/s3mockroot", S3_IMAGE)
+            port = docker("port", s3, "9090/tcp").rsplit(":", 1)[1]
             endpoint = "http://127.0.0.1:" + port
             client = boto3.client("s3", endpoint_url=endpoint, region_name="us-east-1", aws_access_key_id="synthetic-key",
                                   aws_secret_access_key="synthetic-test-secret", config=S3Config(s3={"addressing_style": "path"}, retries={"max_attempts": 1}))
